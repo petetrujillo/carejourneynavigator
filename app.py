@@ -7,18 +7,18 @@ import google.generativeai as genai
 from streamlit_agraph import agraph, Node, Edge, Config
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Career Graph Explorer")
+st.set_page_config(layout="wide", page_title="Monarque Care Journey Navigator")
 
 # --- CSS for Styling ---
 st.markdown("""
 <style>
-    /* Card Styling */
+    /* ADAPTIVE CARD STYLING */
     .deep-dive-card {
-        background-color: #262730;
+        background-color: var(--secondary-background-color);
+        color: var(--text-color);
         padding: 15px;
         border-radius: 10px;
-        border: 1px solid #4B4B4B;
-        color: #FAFAFA;
+        border: 1px solid rgba(128, 128, 128, 0.2);
         height: 100%;
     }
     .deep-dive-card p {
@@ -27,28 +27,18 @@ st.markdown("""
         font-size: 0.95em;
     }
     .highlight-title {
-        color: #FF4B4B;
+        color: #10b981; /* Emerald Green for Monarque */
         font-weight: bold;
         font-size: 1.0em;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
-    .warning-box {
-        background-color: #2d2222;
-        border-left: 5px solid #ff4b4b;
-        padding: 15px;
-        border-radius: 5px;
-        color: #ffcfcf;
-        font-size: 0.9em;
-        margin-bottom: 20px;
-        display: flex;
-        align-items: center;
+    
+    /* FORCE GRAPH BACKGROUND */
+    iframe {
+        background-color: #0e1117 !important;
     }
-    .cost-counter {
-        font-size: 0.8em;
-        color: #00FF00;
-        margin-top: 10px;
-    }
+
     /* Button Tweaks */
     .stButton button {
         width: 100%;
@@ -57,21 +47,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. State Management ---
-if 'mode' not in st.session_state:
-    st.session_state.mode = "Discovery" 
-if 'search_term' not in st.session_state:
-    st.session_state.search_term = "OpenAI"
-if 'resume_text' not in st.session_state:
-    st.session_state.resume_text = ""
 if 'graph_data' not in st.session_state:
     st.session_state.graph_data = None
-if 'history' not in st.session_state:
-    st.session_state.history = []
 if 'token_usage' not in st.session_state:
     st.session_state.token_usage = 0
+if 'session_cost' not in st.session_state:
+    st.session_state.session_cost = 0.0
+if 'should_fetch' not in st.session_state:
+    st.session_state.should_fetch = False
 
 # --- 2. Google Gemini Setup ---
-def get_gemini_response(mode, query, filters):
+def get_gemini_response(user_input):
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
@@ -83,84 +69,54 @@ def get_gemini_response(mode, query, filters):
 
     genai.configure(api_key=api_key)
 
-    filter_text = f"""
-    STRICT CONSTRAINTS:
-    - Target Industry: {filters['industry']}
-    - Company Size Preference: {filters['size']}
-    - Work Style: {filters['style']}
+    # --- MONARQUE CAREGIVING PROMPT LOGIC ---
+    system_instruction = f"""
+    You are an Expert Caregiving Consultant for Monarque Solutions. 
+    Your goal is to reduce cognitive load for employees facing a crisis by visualizing a clear path forward.
+    
+    CONTEXT:
+    The user is an employee balancing work and a caregiving crisis. They are likely overwhelmed.
+    
+    USER INPUT SCENARIO: "{user_input}"
+    
+    TASK:
+    1. CENTER NODE: The Caregiving Event (e.g., "Post-Stroke Recovery" or "Dementia Diagnosis").
+    2. LAYER 1 (Immediate Actions): Identify 4-5 tactical, high-priority steps the employee must take RIGHT NOW (Medical, Legal, Logistical, or Workplace communication).
+    3. LAYER 2 (Support Resources): For EACH Action, connect it to a specific RESOURCE.
+       - Connect "Workplace Actions" to corporate benefits (e.g., "EAP Legal Services", "Flexible Work Policy", "FMLA/Leave").
+       - Connect "Care Actions" to community resources (e.g., "Area Agency on Aging", "Alzheimer's Association", "Social Worker").
+
+    OUTPUT JSON STRUCTURE:
+    {{
+        "center_node": {{
+            "name": "Corrected Scenario Name",
+            "type": "Crisis Event",
+            "mission": "This is a high-stress moment. Here is your immediate roadmap to stabilize the situation.",
+            "positive_news": "You are not alone. Resources exist to help you manage this.",
+            "red_flags": "Watch out for caregiver burnout—prioritize your own sleep and legal paperwork early."
+        }},
+        "connections": [
+            {{
+                "name": "Immediate Action 1",
+                "reason": "Why is this urgent?",
+                "sub_connections": [
+                    {{"name": "Specific Company/Community Resource", "reason": "How does this help?"}}
+                ]
+            }}
+        ]
+    }}
     """
-
-    if mode == "Resume Match":
-        # --- PROMPT B: RESUME ALIGNMENT ---
-        system_instruction = f"""
-        You are a Strategic Career Agent. Analyze the user's RESUME text against constraints.
-        
-        {filter_text}
-        
-        TASK:
-        1. Identify Top 5 Companies that fit this resume AND constraints.
-        2. For EACH company, identify 2-3 specific SKILLS from the resume that create the match.
-        
-        OUTPUT JSON STRUCTURE:
-        {{
-            "center_node": {{
-                "name": "My Career",
-                "type": "Candidate",
-                "mission": "Based on your resume, these are your strongest alignment targets.",
-                "positive_news": "Your Top Skills: [List top 3 skills found in resume]",
-                "red_flags": "Gaps/Areas to Improve: [List 1-2 potential gaps]"
-            }},
-            "connections": [
-                {{
-                    "name": "Target Company",
-                    "reason": "Why it fits?",
-                    "sub_connections": [
-                        {{"name": "Matched Skill 1", "reason": "Relevance"}},
-                        {{"name": "Matched Skill 2", "reason": "Relevance"}}
-                    ]
-                }}
-            ]
-        }}
-        """
-        user_prompt = f"{system_instruction}\n\nRESUME TEXT:\n{query}"
-
-    else:
-        # --- PROMPT A: DISCOVERY ---
-        system_instruction = f"""
-        You are a Strategic Career Intelligence Engine. 
-        Analyze the user's input (Company or Job Title) and return a 3-layer network graph.
-
-        {filter_text}
-
-        PART 1: CENTER NODE (Layer 0) - Provide 'mission', 'positive_news', 'red_flags'.
-        PART 2: DIRECT CONNECTIONS (Layer 1) - Identify exactly 10 related entities matching constraints.
-        PART 3: SECONDARY CONNECTIONS (Layer 2) - For EACH Layer 1 entity, identify 2 top connections.
-
-        OUTPUT JSON STRUCTURE:
-        {{
-            "center_node": {{ "name": "Corrected Name", "type": "Company/Job", "mission": "...", "positive_news": "...", "red_flags": "..." }},
-            "connections": [
-                {{
-                    "name": "Layer 1 Company",
-                    "reason": "Why related?",
-                    "sub_connections": [
-                        {{"name": "Layer 2 Company A", "reason": "Reason"}},
-                        {{"name": "Layer 2 Company B", "reason": "Reason"}}
-                    ]
-                }}
-            ]
-        }}
-        """
-        user_prompt = f"{system_instruction}\n\nUser Input: '{query}'"
-
+    
     try:
         model = genai.GenerativeModel('gemini-flash-latest')
-        with st.spinner(f"🔍 Analyzing..."):
-            response = model.generate_content(user_prompt)
+        with st.spinner(f"🔍 Mapping Support Ecosystem..."):
+            response = model.generate_content(system_instruction)
         
-        input_tokens = len(user_prompt) / 4
+        # Track Tokens & Cost
+        input_tokens = len(system_instruction) / 4
         output_tokens = len(response.text) / 4
         st.session_state.token_usage += (input_tokens + output_tokens)
+        st.session_state.session_cost += 0.003
 
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_text)
@@ -169,104 +125,95 @@ def get_gemini_response(mode, query, filters):
         st.error(f"AI Analysis Error: {e}")
         return None
 
-def generate_email_draft(company, mission, user_resume=""):
-    """Helper to generate a cold email using AI"""
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else os.environ.get("GEMINI_API_KEY")
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-flash-latest')
-        
-        context = f"My Resume Summary: {user_resume[:500]}..." if user_resume else "I am a passionate professional."
-        
-        prompt = f"""
-        Write a short, punchy (under 150 words) cold outreach email to a recruiter at {company}.
-        Context on Company: {mission}
-        Context on Me: {context}
-        Tone: Professional, enthusiastic, but not cringey.
-        Output: Just the email body.
-        """
-        response = model.generate_content(prompt)
-        return response.text
-    except:
-        return "Could not generate draft. Try again."
-
 # --- 3. Sidebar Controls ---
 with st.sidebar:
-    st.title("🕸️ Career Explorer")
+    st.title("Monarque Care Navigator")
     
-    # 1. Mode Switcher
-    mode = st.radio("Select Mode:", ["Discovery", "Resume Match"], horizontal=True)
-    st.session_state.mode = mode
-
-    # 2. Input Section
-    if mode == "Discovery":
-        st.subheader("🔍 Search")
-        user_input = st.text_input("Enter Seed Company/Role:", value=st.session_state.search_term)
-    else:
-        st.subheader("📄 Resume Match")
-        st.info("🔒 Data is analyzed transiently and not stored.")
-        user_resume = st.text_area("Paste Resume Text:", height=150, value=st.session_state.resume_text)
-
-    st.divider()
+    tab_main, tab_about, tab_model = st.tabs(["🧭 Navigation", "ℹ️ About", "🧠 Model Card"])
     
-    # 3. Hunter Filters
-    st.subheader("🎯 Hunter Filters")
-    f_industry = st.selectbox("Target Industry", 
-        ["Any", "SaaS / Software", "Fintech", "HealthTech", "Climate Tech", "E-Commerce", "Gaming", "Crypto/Web3", "Defense/Aerospace"])
-    f_size = st.selectbox("Company Size", 
-        ["Any", "Early Stage (<50 employees)", "Growth Stage (50-500)", "Large Corp (500+)"])
-    f_style = st.selectbox("Work Style", 
-        ["Any", "Remote Friendly", "In-Office / Hybrid"])
+    # --- TAB 1: CONTROLS ---
+    with tab_main:
+        st.markdown("Map your journey from **Crisis** to **Stability**.")
+        st.info("Enter your current situation below to generate a personalized support map.")
+        
+        st.divider()
+        
+        # --- INPUT: CRISIS CONTEXT ---
+        user_scenario = st.text_input("What is happening?", 
+            placeholder="e.g., Mom was just diagnosed with Dementia",
+            help="Be specific. Examples: 'Father had a stroke', 'Spouse surgery recovery', 'Finding assisted living'.")
+        
+        st.divider()
 
-    # 4. Primary Action
-    if st.button("🚀 Launch Analysis", type="primary"):
-        st.session_state.graph_data = None
-        if mode == "Discovery":
-            st.session_state.search_term = user_input
-        else:
-            st.session_state.resume_text = user_resume
-        st.rerun()
+        if st.button("🚀 Generate Support Map", type="primary", key="launch_btn"):
+            if user_scenario:
+                st.session_state.should_fetch = True
+                st.session_state.graph_data = None 
+                st.rerun()
+            else:
+                st.warning("Please describe your situation first.")
 
-    # 5. Clear
-    if st.button("🗑️ Clear Session"):
-        st.session_state.history = []
-        st.session_state.graph_data = None
-        st.session_state.search_term = "OpenAI"
-        st.session_state.resume_text = ""
-        st.session_state.token_usage = 0
-        st.rerun()
+        if st.button("🗑️ Clear Map"):
+            st.session_state.graph_data = None
+            st.session_state.should_fetch = False
+            st.rerun()
+        
+        st.divider()
+        st.caption("Session Monitor")
+        st.metric("Total Cost", f"${st.session_state.session_cost:.3f}", help="Calculated at ~$0.003 per query")
 
-    cost = (st.session_state.token_usage / 1000000) * 0.50
-    st.markdown(f"<div class='cost-counter'>💰 Est. Session Cost: ${cost:.5f}</div>", unsafe_allow_html=True)
+    # --- TAB 2: ABOUT ---
+    with tab_about:
+        st.subheader("Monarque Solutions")
+        st.markdown("""
+        **Transforming How We Work and Care.**
+        
+        We help organizations mitigate the economic and cultural impact of caregiving.
+        
+        * **Identify** at-risk populations.
+        * **Educate** managers to lead with empathy.
+        * **Support** employees with structured roadmaps.
+        """)
+        
+        st.markdown("### 🌐 Connect")
+        st.link_button("🏠 MonarqueSolutions.com", "https://www.monarquesolutions.com")
+        
+        st.divider()
+        st.caption("Powered by DoubleLucky.ai")
+
+    # --- TAB 3: MODEL CARD ---
+    with tab_model:
+        st.subheader("🧠 Model Card")
+        st.caption("Transparency on how this tool works.")
+        
+        st.markdown("""
+        **Project:** Care Journey Navigator  
+        **Model Engine:** Google Gemini 1.5 Flash  
+        **Purpose:** To map complex caregiving life events to actionable steps and available resources.
+
+        #### 🎯 Intended Use
+        * **User:** Employees balancing work & caregiving.
+        * **Goal:** Reduce cognitive load during crisis.
+        * **Output:** A 3-layer graph: Crisis $\\rightarrow$ Actions $\\rightarrow$ Resources.
+
+        #### ⚙️ Logic
+        The model acts as a **Care Consultant**, prioritizing:
+        1.  **Immediate Safety/Legal needs** (Power of Attorney, Discharge Planning).
+        2.  **Corporate Benefits** often overlooked (EAP, Leave, Flex Time).
+        3.  **Community Support** (Non-profits, Government agencies).
+
+        #### ⚠️ Advisory
+        * **Not Medical/Legal Advice:** This tool provides *guidance*, not diagnosis or legal counsel.
+        * **Verification:** Always verify benefit eligibility with your HR department.
+        """)
 
 # --- 4. Main Logic ---
-filters = {"industry": f_industry, "size": f_size, "style": f_style}
-
-if st.session_state.mode == "Discovery":
-    active_query = st.session_state.search_term
-elif st.session_state.mode == "Resume Match":
-    active_query = st.session_state.resume_text
-    if not active_query:
-        st.info("👈 Please paste your resume in the sidebar to begin.")
-        st.stop()
-
-# Auto-Fetch Logic
-should_fetch = False
-if st.session_state.graph_data is None:
-    should_fetch = True
-elif st.session_state.mode == "Discovery" and st.session_state.graph_data.get('center_node', {}).get('name') != active_query:
-    should_fetch = True
-
-if should_fetch:
-    data = get_gemini_response(st.session_state.mode, active_query, filters)
+if st.session_state.should_fetch and user_scenario:
+    data = get_gemini_response(user_scenario)
     if data:
         st.session_state.graph_data = data
-        if st.session_state.mode == "Discovery":
-            real_name = data['center_node']['name']
-            if real_name not in st.session_state.history:
-                st.session_state.history.append(real_name)
-            if active_query != real_name:
-                st.session_state.search_term = real_name
+        st.session_state.should_fetch = False 
+        st.rerun()
 
 # --- 5. Layout Rendering ---
 data = st.session_state.graph_data
@@ -275,40 +222,39 @@ if data:
     center_info = data['center_node']
     connections = data['connections']
 
-    # --- CENTER COLUMN: Warning & Graph ---
-    st.markdown("""
-    <div class="warning-box">
-        <div>⚠️ <b>AI Generated Advisory:</b> Information is generated by Gemini Pro. Verify all role availability, financial health, and company details independently.</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Build Graph
+    # --- CENTER COLUMN: Graph ---
     nodes = []
     edges = []
     node_ids = set()
 
-    # Center Node
+    # Define High-Contrast Font
+    high_contrast_font = {
+        'color': 'white',
+        'strokeWidth': 4,       
+        'strokeColor': 'black'  
+    }
+
+    # Center Node (The Crisis) - RED/ORANGE for Urgency
     nodes.append(Node(
         id=center_info['name'], 
         label=center_info['name'], 
         size=45, 
-        color="#FF4B4B",
-        font={'color': 'white'},
-        url="javascript:void(0);"
+        color="#FF4B4B", 
+        font=high_contrast_font, 
+        shape="dot"
     ))
     node_ids.add(center_info['name'])
 
     for item in connections:
-        # Layer 1
+        # Layer 1: Immediate Actions - BLUE for Clarity
         if item['name'] not in node_ids:
             nodes.append(Node(
                 id=item['name'], 
                 label=item['name'], 
-                size=25, 
-                color="#00C0F2",
-                font={'color': 'white'},
-                title=item['reason'],
-                url="javascript:void(0);"
+                size=30, 
+                color="#00C0F2", 
+                font=high_contrast_font, 
+                title=item['reason']
             ))
             node_ids.add(item['name'])
         
@@ -316,21 +262,21 @@ if data:
             source=center_info['name'], 
             target=item['name'], 
             color="#808080",
-            width=2
+            width=3
         ))
 
-        # Layer 2
+        # Layer 2: Resources - GREEN for Support/Relief
         if 'sub_connections' in item:
             for sub in item['sub_connections']:
                 if sub['name'] not in node_ids:
                     nodes.append(Node(
                         id=sub['name'], 
                         label=sub['name'], 
-                        size=15, 
+                        size=20, 
                         color="#1DB954", 
-                        font={'color': 'white'},
-                        title=f"Connected to {item['name']}",
-                        url="javascript:void(0);"
+                        font=high_contrast_font, 
+                        title=f"Support Resource: {sub['reason']}",
+                        shape="diamond"
                     ))
                     node_ids.add(sub['name'])
                 
@@ -338,83 +284,82 @@ if data:
                     source=item['name'], 
                     target=sub['name'], 
                     color="#404040", 
-                    width=1
+                    width=1,
+                    dashes=True
                 ))
 
+    # Config
     config = Config(
-        width=1400,
-        height=550,
-        directed=False, 
+        width=1200,
+        height=600,
+        directed=True, 
         physics=True, 
-        hierarchical=False,
+        hierarchical=False, 
         nodeHighlightBehavior=True,
         highlightColor="#F7A7A6",
-        collapsible=False
+        collapsible=True,
+        backgroundColor="#0e1117" 
     )
 
-    col_main, col_right = st.columns([2.5, 1])
+    col_main, col_right = st.columns([3, 1])
     
     with col_main:
+        st.subheader(f"Care Map: {center_info['name']}")
+        st.info("💡 **Tip:** Click on the **Green Diamonds** to see how company benefits or community groups can help you with that specific task.")
         clicked_node = agraph(nodes=nodes, edges=edges, config=config)
 
-    # --- RIGHT COLUMN: Tabs ---
+    # --- RIGHT COLUMN: Details ---
     with col_right:
-        # TABS: Dossier | Actions | Network
-        tab_dossier, tab_actions, tab_net = st.tabs(["📂 Dossier", "⚡ Actions", "🕸️ Network"])
+        st.subheader("📝 Action Details")
         
-        with tab_dossier:
-            st.subheader(f"{center_info['name']}")
-            raw_html = f"""
-                <div class="deep-dive-card">
-                    <p>
-                        <span class="highlight-title">📌 Overview</span><br>
-                        {center_info['mission']}
-                    </p>
-                    <p>
-                        <span class="highlight-title">🚀 Signals</span><br>
-                        {center_info['positive_news']}
-                    </p>
-                    <p>
-                        <span class="highlight-title">🚩 Red Flags</span><br>
-                        {center_info['red_flags']}
-                    </p>
-                </div>
-            """
-            st.markdown(textwrap.dedent(raw_html), unsafe_allow_html=True)
-
-        with tab_actions:
-            st.subheader("Take Action")
-            st.markdown("Don't just look, apply.")
-            
-            # 1. SMART LINKS
-            company_safe = urllib.parse.quote(center_info['name'])
-            st.link_button(f"💼 Jobs at {center_info['name']} (LinkedIn)", 
-                           f"https://www.linkedin.com/jobs/search/?keywords={company_safe}")
-            st.link_button(f"📰 News about {center_info['name']} (Google)", 
-                           f"https://www.google.com/search?q={company_safe}+news&tbm=nws")
-            
-            st.divider()
-            
-            # 2. EMAIL GENERATOR
-            st.write("**📧 Cold Outreach Generator**")
-            if st.button("Draft Email to Recruiter"):
-                with st.spinner("Writing draft..."):
-                    draft = generate_email_draft(center_info['name'], center_info['mission'], st.session_state.resume_text)
-                    st.text_area("Copy this:", value=draft, height=200)
-
-        with tab_net:
-            st.write("### Connections")
+        selected_node_name = clicked_node if clicked_node else center_info['name']
+        
+        display_text = ""
+        display_sub = ""
+        
+        if selected_node_name == center_info['name']:
+            display_text = center_info['mission']
+            display_sub = center_info['positive_news']
+        else:
+            found = False
             for c in connections:
-                st.markdown(f"**{c['name']}**")
-                st.caption(f"{c['reason']}")
-                st.divider()
+                if c['name'] == selected_node_name:
+                    display_text = c['reason']
+                    display_sub = "Recommended Resources:"
+                    for sub in c.get('sub_connections', []):
+                        display_sub += f"\n- {sub['name']}"
+                    found = True
+                    break
+                for sub in c.get('sub_connections', []):
+                    if sub['name'] == selected_node_name:
+                        display_text = sub['reason']
+                        display_sub = f"Supports action: {c['name']}"
+                        found = True
+                        break
+            if not found:
+                display_text = "Node details not found."
 
-    # --- Interaction Handler ---
-    if clicked_node and clicked_node != center_info['name']:
-        st.session_state.mode = "Discovery"
-        st.session_state.search_term = clicked_node
-        st.session_state.graph_data = None 
-        st.rerun()
+        # Adaptive Card
+        st.markdown(f"""
+        <div class="deep-dive-card">
+            <div class="highlight-title">{selected_node_name}</div>
+            <p>{display_text}</p>
+            <p><i>{display_sub}</i></p>
+        </div>
+        """, unsafe_allow_html=True)
+            
+        st.divider()
+        if selected_node_name != center_info['name']:
+            # Search logic tailored for Caregiving
+            query = urllib.parse.quote(f"{selected_node_name} help and resources")
+            st.link_button("🔎 Find Help (Google)", f"https://www.google.com/search?q={query}")
 
 else:
-    st.info("Waiting for input...")
+    # Landing State
+    st.markdown("""
+    <div style="text-align: center; padding: 50px;">
+        <h1>🧭 Welcome to the Care Journey Navigator</h1>
+        <p>Caregiving is complex. We make the next step clear.</p>
+        <p style="font-size: 0.9em; color: gray;">Enter your current situation on the left to generate a personalized support map.</p>
+    </div>
+    """, unsafe_allow_html=True)
